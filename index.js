@@ -76,18 +76,19 @@ async function handleEvent(event) {
 // ===== 4. ฟังก์ชันดึงระดับน้ำ P.67 =====
 async function getWaterLevel() {
   try {
-    const url = "https://hydro-1.rid.go.th/Data/HD-04/houly/water_today.php";
+    // ใช้ ThaiWater API เพื่อดึงข้อมูลสถานีวัดน้ำ
+    const url = "https://data.thaiwater.net/api/v1/river_station";
     const res = await axios.get(url);
-    const $ = cheerio.load(res.data);
-    let level = null;
-
-    $("table tr").each((i, el) => {
-      const tds = $(el).find("td");
-      if (tds.eq(0).text().trim() === "P.67") {
-        level = parseFloat(tds.eq(4).text().trim());
-      }
-    });
-    return level;
+    const stations = res.data && res.data.data ? res.data.data : [];
+    // หา station ที่มี station_oldcode หรือ station_id เป็น 'P.67'
+    const p67 = stations.find(
+      (s) => s.station_oldcode === "P.67" || s.station_id === "P.67"
+    );
+    if (p67 && p67.water_level) {
+      // water_level อาจเป็น string หรือ number
+      return parseFloat(p67.water_level);
+    }
+    return null;
   } catch (err) {
     console.error("ดึงข้อมูลน้ำล้มเหลว:", err);
     return null;
