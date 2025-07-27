@@ -23,9 +23,8 @@ if (fs.existsSync("users.json")) {
 
 // ===== 3. Webhook เก็บ userId คนที่ทักมา =====
 app.post("/webhook", line.middleware(config), (req, res) => {
-  Promise
-    .all(req.body.events.map(handleEvent))
-    .then(() => res.end())
+  Promise.all(req.body.events.map(handleEvent))
+    .then(() => res.status(200).end())
     .catch((err) => {
       console.error(err);
       res.status(500).end();
@@ -51,6 +50,11 @@ async function handleEvent(event) {
     }
   }
 }
+
+// ===== ✅ 3.1 GET /webhook (สำหรับ Verify) =====
+app.get("/webhook", (req, res) => {
+  res.status(200).send("OK");
+});
 
 // ===== 4. ฟังก์ชันดึงระดับน้ำ P.67 =====
 async function getWaterLevel() {
