@@ -1,12 +1,13 @@
+require("dotenv").config();
 const axios = require("axios");
 const cheerio = require("cheerio");
 const line = require("@line/bot-sdk");
 const cron = require("node-cron");
 const express = require("express");
 const fs = require("fs");
+const bodyParser = require("body-parser");
 
 const app = express();
-app.use(express.json());
 
 // ===== 1. ตั้งค่า LINE Bot =====
 const config = {
@@ -21,16 +22,37 @@ if (fs.existsSync("users.json")) {
   USERS = JSON.parse(fs.readFileSync("users.json"));
 }
 
-// ===== 3. Webhook เก็บ userId คนที่ทักมา =====
-app.post("/webhook", line.middleware(config), (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then(() => res.status(200).end())
-    .catch((err) => {
-      console.error(err);
-      res.status(500).end();
-    });
+// ===== 3. Webhook =====
+
+// ✅ สำหรับ Verify (GET)
+app.get("/webhook", (req, res) => {
+  res.status(200).send("OK");
 });
 
+// ✅ สำหรับรับ Event (POST) — ใช้ raw body
+app.post(
+  "/webhook",
+  bodyParser.raw({ type: "*/*" }),
+  line.middleware(config),
+  async (req, res) => {
+    try {
+      if (!req.body || !req.body.length) {
+        return res.status(200).send("No events");
+      }
+
+      // ต้อง parse เอง เพราะตอนนี้เป็น Buffer
+      const parsed = JSON.parse(req.body.toString("utf-8"));
+
+      await Promise.all(parsed.events.map(handleEvent));
+      res.status(200).end();
+    } catch (err) {
+      console.error("Webhook Error:", err);
+      res.status(200).end(); // ✅ ตอบ 200 เพื่อให้ Verify ผ่าน
+    }
+  }
+);
+
+// ===== 3.1 ฟังก์ชันตอบกลับและบันทึก userId =====
 async function handleEvent(event) {
   if (event.type === "message" && event.message.type === "text") {
     const userId = event.source.userId;
@@ -50,11 +72,6 @@ async function handleEvent(event) {
     }
   }
 }
-
-// ===== ✅ 3.1 GET /webhook (สำหรับ Verify) =====
-app.get("/webhook", (req, res) => {
-  res.status(200).send("OK");
-});
 
 // ===== 4. ฟังก์ชันดึงระดับน้ำ P.67 =====
 async function getWaterLevel() {
@@ -106,5 +123,5 @@ cron.schedule("*/30 * * * *", async () => {
 // ===== 7. Run Server (Render ต้องใช้) =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
