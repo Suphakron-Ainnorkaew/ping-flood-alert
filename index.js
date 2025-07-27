@@ -1,6 +1,6 @@
 require("dotenv").config();
 const axios = require("axios");
-const cheerio = require("cheerio");
+// const cheerio = require("cheerio"); // ไม่ใช้แล้ว
 const line = require("@line/bot-sdk");
 const cron = require("node-cron");
 const express = require("express");
@@ -73,35 +73,48 @@ async function handleEvent(event) {
   }
 }
 
-// ===== 4. ฟังก์ชันดึงระดับน้ำ P.67 =====
-async function getWaterLevel() {
+// ===== 4. ฟังก์ชันดึงพยากรณ์ฝน เชียงใหม่ =====
+// ใช้ OpenWeatherMap API (ฟรี สมัคร key ได้ที่ https://openweathermap.org/api)
+// ใส่ API key ใน .env เช่น OWM_API_KEY=xxxx
+async function getRainForecast() {
   try {
-    // ใช้ ThaiWater API เพื่อดึงข้อมูลสถานีวัดน้ำ
-    const url = "https://data.thaiwater.net/api/v1/river_station";
+    const apiKey = process.env.OWM_API_KEY;
+    if (!apiKey) throw new Error('No OpenWeatherMap API key');
+    // Chiang Mai: lat=18.7883, lon=98.9853
+    const url = `https://api.openweathermap.org/data/2.5/forecast?lat=18.7883&lon=98.9853&units=metric&lang=th&appid=${apiKey}`;
     const res = await axios.get(url);
-    const stations = res.data && res.data.data ? res.data.data : [];
-    // หา station ที่มี station_oldcode หรือ station_id เป็น 'P.67'
-    const p67 = stations.find(
-      (s) => s.station_oldcode === "P.67" || s.station_id === "P.67"
-    );
-    if (p67 && p67.water_level) {
-      // water_level อาจเป็น string หรือ number
-      return parseFloat(p67.water_level);
-    }
-    return null;
+    // หาค่าความน่าจะเป็นฝนใน 12 ชั่วโมงข้างหน้า
+    const forecasts = res.data.list.slice(0, 4); // 3 ชม. x 4 = 12 ชม.
+    // ถ้ามี rain หรือ weather main เป็น Rain ในช่วงใดช่วงหนึ่ง ให้แจ้งเตือน
+    const willRain = forecasts.some(f => {
+      if (f.rain && f.rain["3h"] && f.rain["3h"] > 0) return true;
+      if (f.weather && f.weather.some(w => w.main === "Rain")) return true;
+      return false;
+    });
+    // ดึงรายละเอียดช่วงที่ฝนตก (ถ้ามี)
+    const rainTimes = forecasts.filter(f => (f.rain && f.rain["3h"] > 0) || (f.weather && f.weather.some(w => w.main === "Rain")));
+    return {
+      willRain,
+      rainTimes: rainTimes.map(f => ({ time: f.dt_txt, desc: f.weather[0].description, amount: f.rain ? f.rain["3h"] : 0 }))
+    };
   } catch (err) {
-    console.error("ดึงข้อมูลน้ำล้มเหลว:", err);
-    return null;
+    console.error("ดึงข้อมูลพยากรณ์ฝนล้มเหลว:", err);
+    return { willRain: false, rainTimes: [] };
   }
 }
 
-// ===== 5. ฟังก์ชันส่งแจ้งเตือน =====
-async function sendAlert(level) {
-  const msg = `⚠️ เตือนภัยน้ำปิง\nสถานี P.67: ${level} ม.\nโปรดเฝ้าระวังน้ำท่วม!`;
+// ===== 5. ฟังก์ชันส่งแจ้งเตือนฝนตก =====
+async function sendRainAlert(rainInfo) {
+  let msg = `🌧️ แจ้งเตือนฝนตกในเชียงใหม่\n`;
+  if (rainInfo.rainTimes.length > 0) {
+    msg += rainInfo.rainTimes.map(rt => `• ${rt.time}: ${rt.desc} (${rt.amount} มม.)`).join("\n");
+  } else {
+    msg += "มีโอกาสเกิดฝนตกใน 12 ชั่วโมงข้างหน้า กรุณาเตรียมตัว!";
+  }
   for (let user of USERS) {
     try {
       await client.pushMessage(user, { type: "text", text: msg });
-      console.log("ส่งแจ้งเตือนแล้วถึง:", user);
+      console.log("ส่งแจ้งเตือนฝนตกแล้วถึง:", user);
     } catch (err) {
       console.error("ส่งไม่สำเร็จ:", err);
     }
@@ -110,15 +123,19 @@ async function sendAlert(level) {
 
 // ===== 6. ตั้งเวลารันอัตโนมัติทุก 30 นาที =====
 cron.schedule("*/30 * * * *", async () => {
-  console.log("⏳ กำลังเช็กระดับน้ำ...");
-  const level = await getWaterLevel();
-  const threshold = 4.0; // เกณฑ์เตือน
-  if (level && level >= threshold) {
-    console.log("⚠️ น้ำเกินเกณฑ์ → ส่งแจ้งเตือน");
-    await sendAlert(level);
+  console.log("⏳ กำลังเช็กพยากรณ์ฝนเชียงใหม่...");
+  const rainInfo = await getRainForecast();
+  if (rainInfo.willRain) {
+    console.log("🌧️ มีโอกาสฝนตก → ส่งแจ้งเตือน");
+    await sendRainAlert(rainInfo);
   } else {
-    console.log("ระดับน้ำปกติ:", level);
+    console.log("อากาศปกติ ไม่มีฝนใน 12 ชม.ข้างหน้า");
   }
+});
+
+app.get("/rainforecast", async (req, res) => {
+  const rainInfo = await getRainForecast();
+  res.json(rainInfo);
 });
 
 // ===== 7. Run Server (Render ต้องใช้) =====
